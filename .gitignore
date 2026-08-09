@@ -122,3 +122,12 @@ __pycache__/
 # ==================
 .cache
 compile_commands.json
+# Gemini proxy local
+.venv/
+__pycache__/
+*.pyc
+*.log
+*.log.*
+*.bak
+*.bak-*
+*:Zone.Identifier

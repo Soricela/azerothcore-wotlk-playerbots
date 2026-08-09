@@ -1,4 +1,11 @@
 services:
+  ac-db-import:
+    image: soricut/acore-custom-db-import:1.6.21-wowmina
+
+  ac-authserver:
+    image: soricut/acore-custom-auth:1.3.5-playerbots
+
   ac-worldserver:
+    image: soricut/acore-custom-world:1.6.22-wowmina
     volumes:
       - ./modules:/azerothcore/modules:ro
