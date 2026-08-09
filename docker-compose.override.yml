@@ -6,6 +6,6 @@ services:
     image: soricut/acore-custom-auth:1.3.5-playerbots
 
   ac-worldserver:
-    image: soricut/acore-custom-world:1.6.22-wowmina
+    image: soricut/acore-custom-world:1.6.23-wowmina
     volumes:
       - ./modules:/azerothcore/modules:ro
