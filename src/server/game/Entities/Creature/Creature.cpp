@@ -1399,7 +1399,7 @@ void Creature::SaveToDB(uint32 mapid, uint8 spawnMask, uint32 phaseMask)
         m_spawnId = sObjectMgr->GenerateCreatureSpawnId();
 
     CreatureData& data = sObjectMgr->NewOrExistCreatureData(m_spawnId);
-    data.spawnId = m_spawnId;  // mod_playerbots
+    data.spawnId = m_spawnId;
     uint32 displayId = GetNativeDisplayId();
     uint32 npcflag = GetNpcFlags();
     uint32 unit_flags = GetUnitFlags();
@@ -1771,6 +1771,9 @@ bool Creature::LoadCreatureFromDB(ObjectGuid::LowType spawnId, Map* map, bool ad
 
     SetHealth(m_deathState == DeathState::Alive ? curhealth : 0);
 
+    // SelectLevel() sized the player damage requirement against full health, before curhealth was known
+    ResetPlayerDamageReq();
+
     // checked at creature_template loading
     m_defaultMovementType = MovementGeneratorType(data->movementType);
 
@@ -2114,7 +2117,7 @@ void Creature::Respawn(bool force)
 
                 uint32 poolid = m_spawnId ? sPoolMgr->IsPartOfAPool<Creature>(m_spawnId) : 0;
                 if (poolid)
-                    sPoolMgr->UpdatePool<Creature>(poolid, m_spawnId);
+                    sPoolMgr->UpdatePool<Creature>(GetMap()->GetPoolData(), poolid, m_spawnId);
 
                 //Re-initialize reactstate that could be altered by movementgenerators
                 InitializeReactState();
@@ -2172,14 +2175,17 @@ void Creature::ForcedDespawn(Milliseconds timeMSToDespawn, Seconds forceRespawnT
     if (forceRespawnTimer > 0s)
         m_respawnDelay = forceRespawnTimer.count();
 
-    if (IsAlive())
+    bool const wasAlive = IsAlive();
+
+    if (wasAlive)
         setDeathState(DeathState::JustDied, true);
 
     // Xinef: Set new respawn time, ignore corpse decay time...
-    // After setDeathState, m_respawnTime includes m_corpseDelay which we don't
-    // want for a forced respawn. Override it so RemoveCorpse's max() picks ours.
-    if (forceRespawnTimer > 0s)
-        m_respawnTime = GameTime::GetGameTime().count() + forceRespawnTimer.count();
+    // setDeathState(JustDied) folds m_corpseDelay into m_respawnTime, but a creature
+    // despawned while alive never leaves a corpse, so the decay must not be charged.
+    // Recompute so RemoveCorpse's max() has nothing stale to pick up.
+    if (forceRespawnTimer > 0s || wasAlive)
+        m_respawnTime = GameTime::GetGameTime().count() + m_respawnDelay;
 
     RemoveCorpse(true);
 
@@ -3003,27 +3009,47 @@ void Creature::AddSpellCooldown(uint32 spell_id, uint32 /*itemid*/, uint32 end_t
     }
 
     SpellCategoryStore::const_iterator i_scstore = sSpellsByCategoryStore.find(categoryId);
-    if (categorycooldown && i_scstore != sSpellsByCategoryStore.end())
+    bool const hasCategoryCooldown = categorycooldown && i_scstore != sSpellsByCategoryStore.end();
+    if (hasCategoryCooldown)
     {
-        for (SpellCategorySet::const_iterator i_scset = i_scstore->second.begin(); i_scset != i_scstore->second.end(); ++i_scset)
+        for (auto const& [itemBased, categorySpellId] : i_scstore->second)
         {
-            _AddCreatureSpellCooldown(i_scset->second, categoryId, categorycooldown);
+            // A longer cooldown still running on a category spell is never shortened
+            if (GetSpellCooldown(categorySpellId) > categorycooldown)
+                continue;
+
+            _AddCreatureSpellCooldown(categorySpellId, categoryId, categorycooldown);
         }
-    }
-    else if (spellcooldown)
-    {
-        _AddCreatureSpellCooldown(spellInfo->Id, 0, spellcooldown);
     }
 
-    if (sSpellMgr->HasSpellCooldownOverride(spellInfo->Id))
+    // The cast spell keeps its own recovery time when it outlasts the category cooldown
+    if (spellcooldown > categorycooldown)
+        _AddCreatureSpellCooldown(spellInfo->Id, 0, spellcooldown);
+
+    // The controlling player only learns creature cooldowns from us, category spells included
+    Player* player = GetCharmerOrOwnerPlayerOrPlayerItself();
+    if (!player)
+        return;
+
+    PacketCooldowns cooldowns;
+    if (hasCategoryCooldown)
     {
-        if (IsCharmed() && GetCharmer()->IsPlayer())
+        for (auto const& [itemBased, categorySpellId] : i_scstore->second)
         {
-            WorldPacket data;
-            BuildCooldownPacket(data, SPELL_COOLDOWN_FLAG_NONE, spellInfo->Id, spellcooldown);
-            GetCharmer()->ToPlayer()->SendDirectMessage(&data);
+            if (HasSpell(categorySpellId))
+                cooldowns[categorySpellId] = GetSpellCooldown(categorySpellId);
         }
     }
+
+    if (uint32 remaining = GetSpellCooldown(spellInfo->Id))
+        cooldowns[spellInfo->Id] = remaining;
+
+    if (cooldowns.empty())
+        return;
+
+    WorldPacket data;
+    BuildCooldownPacket(data, SPELL_COOLDOWN_FLAG_NONE, cooldowns);
+    player->SendDirectMessage(&data);
 }
 
 uint32 Creature::GetSpellCooldown(uint32 spell_id) const
