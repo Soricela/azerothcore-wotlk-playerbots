@@ -1,0 +1,105 @@
+name: custom-fullmods-images
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: Docker tag for the three custom images
+        required: true
+        default: playerbots-mythic-20260920
+        type: string
+      push_images:
+        description: Push images to Docker Hub
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: custom-fullmods-images-${{ github.ref }}-${{ inputs.image_tag }}
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAMESPACE: soricut
+
+jobs:
+  build:
+    name: Build custom AzerothCore images
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+
+      - name: Checkout core
+        uses: actions/checkout@v7
+
+      - name: Install exact module revisions
+        run: |
+          chmod +x apps/ci/ci-install-locked-modules.sh
+          apps/ci/ci-install-locked-modules.sh
+
+          test -f modules/mod-invasions/CMakeLists.txt
+          test -f modules/mod-no-fatigue/CMakeLists.txt
+
+      - name: Login to Docker Hub
+        if: ${{ inputs.push_images }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build worldserver
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/docker/Dockerfile
+          target: worldserver
+          push: ${{ inputs.push_images }}
+          tags: ${{ env.IMAGE_NAMESPACE }}/acore-custom-world:${{ inputs.image_tag }}
+          build-args: |
+            USER_ID=1000
+            GROUP_ID=1000
+            DOCKER_USER=acore
+          cache-from: type=gha,scope=custom-worldserver
+          cache-to: type=gha,mode=max,scope=custom-worldserver
+
+      - name: Build authserver
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/docker/Dockerfile
+          target: authserver
+          push: ${{ inputs.push_images }}
+          tags: ${{ env.IMAGE_NAMESPACE }}/acore-custom-auth:${{ inputs.image_tag }}
+          build-args: |
+            USER_ID=1000
+            GROUP_ID=1000
+            DOCKER_USER=acore
+          cache-from: type=gha,scope=custom-authserver
+          cache-to: type=gha,mode=max,scope=custom-authserver
+
+      - name: Build db-import
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/docker/Dockerfile
+          target: db-import
+          push: ${{ inputs.push_images }}
+          tags: ${{ env.IMAGE_NAMESPACE }}/acore-custom-db-import:${{ inputs.image_tag }}
+          build-args: |
+            USER_ID=1000
+            GROUP_ID=1000
+            DOCKER_USER=acore
+          cache-from: type=gha,scope=custom-db-import
+          cache-to: type=gha,mode=max,scope=custom-db-import

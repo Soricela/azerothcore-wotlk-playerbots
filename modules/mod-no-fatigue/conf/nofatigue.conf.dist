@@ -1,0 +1,12 @@
+#
+# mod-no-fatigue
+#
+
+#
+#    NoFatigue.EnableFatigue
+#        Description: Enables or disables fatigue system in dark water.
+#        Default:     true
+#                     true  - normal AzerothCore behaviour
+#                     false - no fatigue bar, no fatigue notification, no damage
+#
+NoFatigue.EnableFatigue = true
