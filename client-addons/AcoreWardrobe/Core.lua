@@ -270,8 +270,6 @@ end
 
 requestSync = function()
   clear(active)
-  setStatus("Sincronizando equipo...")
-  queueCommand(string.format(".transmog wardrobe sync %d", currentSlot()))
   requestCatalog(1)
 end
 
