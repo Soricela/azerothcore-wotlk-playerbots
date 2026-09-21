@@ -47,6 +47,7 @@ local commandQueue = {}
 local currentCategory = 1
 local page = 1
 local pageSize = 30
+local hasMorePages = false
 local updateElapsed = 0
 local retryElapsed = 0
 local retryCount = 0
@@ -94,6 +95,9 @@ local function refreshModel()
   end
 
   model:SetUnit("player")
+  if model.SetFacing then
+    model:SetFacing(model.rotation or 0)
+  end
   for slot, itemId in pairs(active) do
     local replacement = pending[slot]
     if replacement == nil then
@@ -161,14 +165,13 @@ local function refreshGrid()
     return left.name < right.name
   end)
 
-  local maxPage = math.max(1, math.ceil(#filtered / pageSize))
-  page = math.min(math.max(page, 1), maxPage)
-  addon.window.pageText:SetFormattedText("Página %d / %d", page, maxPage)
-  addon.window.countText:SetFormattedText("Colección: %d", #filtered)
+  addon.window.pageText:SetFormattedText("Página %d%s", page, hasMorePages and " / …" or "")
+  addon.window.countText:SetFormattedText("Apariencias: %d", #filtered)
+  addon.window.previous:SetEnabled(page > 1)
+  addon.window.next:SetEnabled(hasMorePages)
 
-  local first = (page - 1) * pageSize + 1
   for index, button in ipairs(addon.window.itemButtons) do
-    local item = filtered[first + index - 1]
+    local item = filtered[index]
     button.item = item
     if item then
       button.icon:SetTexture(item.texture or "Interface\\Icons\\INV_Misc_QuestionMark")
@@ -253,14 +256,23 @@ local function removeCurrentSlot()
   setStatus("La apariencia de esta ranura se eliminará al aplicar.")
 end
 
-requestSync = function()
+local function requestCatalog(targetPage)
+  page = math.max(1, targetPage or 1)
   clear(collection)
   clear(catalog)
   clear(filtered)
   clear(unresolved)
+  hasMorePages = false
   refreshGrid()
-  setStatus("Sincronizando colección...")
-  SendChatMessage(string.format(".transmog wardrobe sync %d", currentSlot()), "SAY")
+  setStatus("Cargando apariencias compatibles...")
+  queueCommand(string.format(".transmog wardrobe catalog %d %d", currentSlot(), page - 1))
+end
+
+requestSync = function()
+  clear(active)
+  setStatus("Sincronizando equipo...")
+  queueCommand(string.format(".transmog wardrobe sync %d", currentSlot()))
+  requestCatalog(1)
 end
 
 local function createItemButton(parent, index)
@@ -332,6 +344,30 @@ local function createWindow()
   frame.model:SetSize(360, 455)
   frame.model:SetPoint("TOPLEFT", 28, -105)
   frame.model:SetUnit("player")
+  frame.model:EnableMouse(true)
+  frame.model.rotation = 0
+  frame.model:SetScript("OnMouseDown", function(self, button)
+    if button == "LeftButton" then
+      self.rotating = true
+      self.lastCursorX = GetCursorPosition()
+    end
+  end)
+  frame.model:SetScript("OnMouseUp", function(self)
+    self.rotating = false
+  end)
+  frame.model:SetScript("OnUpdate", function(self)
+    if not self.rotating then
+      return
+    end
+
+    local cursorX = GetCursorPosition()
+    local delta = cursorX - (self.lastCursorX or cursorX)
+    if delta ~= 0 then
+      self.rotation = (self.rotation or 0) - delta * 0.01
+      self:SetFacing(self.rotation)
+      self.lastCursorX = cursorX
+    end
+  end)
 
   local modelBorder = CreateFrame("Frame", nil, frame)
   modelBorder:SetPoint("TOPLEFT", frame.model, -5, 5)
@@ -349,7 +385,7 @@ local function createWindow()
 
   local searchLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
   searchLabel:SetPoint("BOTTOMLEFT", frame.search, "TOPLEFT", 2, 4)
-  searchLabel:SetText("Buscar en la colección")
+  searchLabel:SetText("Buscar en esta página")
 
   frame.countText = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
   frame.countText:SetPoint("LEFT", frame.search, "RIGHT", 18, 0)
@@ -378,18 +414,22 @@ local function createWindow()
   previous:SetPoint("BOTTOMRIGHT", -224, 54)
   previous:SetText("Anterior")
   previous:SetScript("OnClick", function()
-    page = math.max(1, page - 1)
-    refreshGrid()
+    if page > 1 then
+      requestCatalog(page - 1)
+    end
   end)
+  frame.previous = previous
 
   local nextButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
   nextButton:SetSize(80, 24)
   nextButton:SetPoint("BOTTOMRIGHT", -42, 54)
   nextButton:SetText("Siguiente")
   nextButton:SetScript("OnClick", function()
-    page = page + 1
-    refreshGrid()
+    if hasMorePages then
+      requestCatalog(page + 1)
+    end
   end)
+  frame.next = nextButton
 
   frame.pageText = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
   frame.pageText:SetPoint("CENTER", previous, "RIGHT", 51, 0)
@@ -432,9 +472,8 @@ local function processProtocol(message)
     if tonumber(syncBeginSlot) ~= currentSlot() then
       return true
     end
-    clear(collection)
     clear(active)
-    setStatus("Recibiendo colección...")
+    setStatus("Recibiendo equipo...")
     return true
   end
 
@@ -443,13 +482,7 @@ local function processProtocol(message)
     if tonumber(syncEndSlot) ~= currentSlot() then
       return true
     end
-    buildCatalog()
     refreshModel()
-    if next(collection) then
-      setStatus("Colección sincronizada.")
-    else
-      setStatus("Equipa un objeto en esta ranura o reúne apariencias compatibles.", true)
-    end
     return true
   end
 
@@ -459,13 +492,43 @@ local function processProtocol(message)
     return true
   end
 
-  local syncSlot, syncPayload = string.match(message, "^WARDROBE_SYNC:(%d+):(.*)$")
-  if syncSlot then
-    if tonumber(syncSlot) ~= currentSlot() then
+  local catalogBeginSlot, catalogBeginPage = string.match(message, "^WARDROBE_CATALOG_BEGIN:(%d+):(%d+)$")
+  if catalogBeginSlot then
+    if tonumber(catalogBeginSlot) ~= currentSlot() or tonumber(catalogBeginPage) ~= page - 1 then
       return true
     end
-    for itemId in string.gmatch(syncPayload, "(%d+)") do
+    clear(collection)
+    clear(catalog)
+    clear(filtered)
+    clear(unresolved)
+    hasMorePages = false
+    refreshGrid()
+    setStatus("Recibiendo apariencias...")
+    return true
+  end
+
+  local catalogSlot, catalogPage, catalogPayload = string.match(message, "^WARDROBE_CATALOG:(%d+):(%d+):(.*)$")
+  if catalogSlot then
+    if tonumber(catalogSlot) ~= currentSlot() or tonumber(catalogPage) ~= page - 1 then
+      return true
+    end
+    for itemId in string.gmatch(catalogPayload, "(%d+)") do
       collection[tonumber(itemId)] = true
+    end
+    return true
+  end
+
+  local catalogEndSlot, catalogEndPage, catalogMore = string.match(message, "^WARDROBE_CATALOG_END:(%d+):(%d+):(%d+)$")
+  if catalogEndSlot then
+    if tonumber(catalogEndSlot) ~= currentSlot() or tonumber(catalogEndPage) ~= page - 1 then
+      return true
+    end
+    hasMorePages = tonumber(catalogMore) == 1
+    buildCatalog()
+    if next(collection) then
+      setStatus("Apariencias compatibles cargadas.")
+    else
+      setStatus("Equipa un objeto en esta ranura.", true)
     end
     return true
   end
@@ -482,12 +545,8 @@ local function processProtocol(message)
       pending[slot] = nil
     end
 
-    if resultCode == "COLLECTION" then
-      setStatus("La apariencia no pertenece a tu colección.", true)
-    else
-      local failed = numericCode ~= 1 and numericCode ~= 9
-      setStatus(resultMessages[numericCode] or ("Resultado del servidor: " .. resultCode), failed)
-    end
+    local failed = numericCode ~= 1 and numericCode ~= 9
+    setStatus(resultMessages[numericCode] or ("Resultado del servidor: " .. resultCode), failed)
     refreshModel()
     refreshGrid()
     return true
