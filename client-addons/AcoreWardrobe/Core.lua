@@ -48,6 +48,7 @@ local currentCategory = 1
 local page = 1
 local pageSize = 30
 local hasMorePages = false
+local exploreMode = false
 local updateElapsed = 0
 local retryElapsed = 0
 local retryCount = 0
@@ -264,8 +265,13 @@ local function requestCatalog(targetPage)
   clear(unresolved)
   hasMorePages = false
   refreshGrid()
-  setStatus("Cargando apariencias compatibles...")
-  queueCommand(string.format(".transmog wardrobe catalog %d %d", currentSlot(), page - 1))
+  if exploreMode then
+    setStatus("Explorando apariencias de esta categoría...")
+    queueCommand(string.format(".transmog wardrobe browse %d %d", currentSlot(), page - 1))
+  else
+    setStatus("Cargando apariencias compatibles...")
+    queueCommand(string.format(".transmog wardrobe catalog %d %d", currentSlot(), page - 1))
+  end
 end
 
 requestSync = function()
@@ -387,6 +393,21 @@ local function createWindow()
 
   frame.countText = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
   frame.countText:SetPoint("LEFT", frame.search, "RIGHT", 18, 0)
+
+  local modeButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+  modeButton:SetSize(180, 24)
+  modeButton:SetPoint("TOPLEFT", 425, -105)
+  modeButton:SetText("Modo: compatibles")
+  modeButton:SetScript("OnClick", function(self)
+    exploreMode = not exploreMode
+    if exploreMode then
+      self:SetText("Modo: explorar")
+    else
+      self:SetText("Modo: compatibles")
+    end
+    requestCatalog(1)
+  end)
+  frame.modeButton = modeButton
 
   frame.categoryButtons = {}
   for index, category in ipairs(categories) do
@@ -524,7 +545,13 @@ local function processProtocol(message)
     hasMorePages = tonumber(catalogMore) == 1
     buildCatalog()
     if next(collection) then
-      setStatus("Apariencias compatibles cargadas.")
+      if exploreMode then
+        setStatus("Apariencias para explorar cargadas.")
+      else
+        setStatus("Apariencias compatibles cargadas.")
+      end
+    elseif exploreMode then
+      setStatus("No hay apariencias para esta categoría.", true)
     else
       setStatus("Equipa un objeto en esta ranura.", true)
     end
