@@ -56,6 +56,9 @@ local catalogTotal = 0
 local updateElapsed = 0
 local retryElapsed = 0
 local retryCount = 0
+local warmupElapsed = 0
+local warmupIndex = 1
+local warmupTooltip
 local searchElapsed = 0
 local searchPending = false
 local requestSync
@@ -182,6 +185,25 @@ local function addCatalogItem(itemId)
   return false
 end
 
+local function unresolvedCount()
+  local count = 0
+  for _ in pairs(unresolved) do
+    count = count + 1
+  end
+  return count
+end
+
+local function setCatalogStatus()
+  local pendingIcons = unresolvedCount()
+  if pendingIcons > 0 then
+    setStatus(string.format("Apariencias cargadas. Preparando %d iconos...", pendingIcons))
+  elseif exploreMode then
+    setStatus("Apariencias para explorar cargadas.")
+  else
+    setStatus("Apariencias compatibles cargadas.")
+  end
+end
+
 local function refreshGrid()
   if not addon.window then
     return
@@ -209,6 +231,13 @@ local function refreshGrid()
     button.item = item
     if item then
       button.icon:SetTexture(item.texture or "Interface\\Icons\\INV_Misc_QuestionMark")
+      if unresolved[item.id] then
+        button.icon:SetAlpha(0.45)
+        button.loading:Show()
+      else
+        button.icon:SetAlpha(1)
+        button.loading:Hide()
+      end
       button:Show()
       if pending[currentSlot()] == item.id then
         button.selected:Show()
@@ -227,6 +256,7 @@ local function buildCatalog()
   for _, itemId in ipairs(catalogOrder) do
     addCatalogItem(itemId)
   end
+  warmupIndex = 1
   retryCount = 0
   refreshGrid()
 end
@@ -334,6 +364,12 @@ local function createItemButton(parent, index)
   button.selected:SetTexture("Interface\\Buttons\\CheckButtonHilight")
   button.selected:SetBlendMode("ADD")
   button.selected:Hide()
+
+  button.loading = button:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  button.loading:SetPoint("CENTER", 0, -1)
+  button.loading:SetText("...")
+  button.loading:SetTextColor(1, 0.82, 0)
+  button.loading:Hide()
 
   button:SetScript("OnClick", function(self)
     selectItem(self.item)
@@ -705,11 +741,7 @@ local function processProtocol(message)
     hasMorePages = tonumber(catalogMore) == 1
     buildCatalog()
     if next(collection) then
-      if exploreMode then
-        setStatus("Apariencias para explorar cargadas.")
-      else
-        setStatus("Apariencias compatibles cargadas.")
-      end
+      setCatalogStatus()
     elseif exploreMode then
       setStatus("No hay apariencias para esta categoría.", true)
     else
@@ -756,12 +788,34 @@ local function retryUnresolvedItems()
   end
   if changed then
     refreshGrid()
+    setCatalogStatus()
+  end
+end
+
+local function warmupNextItem()
+  -- In the 3.3.5 client, setting an item hyperlink on a tooltip requests its
+  -- cached metadata immediately. This mirrors the native hover behaviour,
+  -- but uses an invisible tooltip and limits requests to one at a time.
+  while warmupIndex <= #catalogOrder do
+    local itemId = catalogOrder[warmupIndex]
+    warmupIndex = warmupIndex + 1
+    if unresolved[itemId] then
+      if not warmupTooltip then
+        warmupTooltip = CreateFrame("GameTooltip", "AcoreWardrobeWarmupTooltip", UIParent, "GameTooltipTemplate")
+      end
+      warmupTooltip:SetOwner(UIParent, "ANCHOR_NONE")
+      warmupTooltip:ClearLines()
+      warmupTooltip:SetHyperlink("item:" .. itemId)
+      warmupTooltip:Hide()
+      return
+    end
   end
 end
 
 addon:SetScript("OnUpdate", function(_, elapsed)
   updateElapsed = updateElapsed + elapsed
   retryElapsed = retryElapsed + elapsed
+  warmupElapsed = warmupElapsed + elapsed
   if searchPending then
     searchElapsed = searchElapsed + elapsed
   end
@@ -771,10 +825,18 @@ addon:SetScript("OnUpdate", function(_, elapsed)
     SendChatMessage(table.remove(commandQueue, 1), "SAY")
   end
 
-  if retryElapsed >= 1 and next(unresolved) and retryCount < 15 then
+  -- A cold 3.3.5 cache resolves item metadata asynchronously. Retry more
+  -- frequently for the visible page; the item-info event refreshes each icon
+  -- as soon as the client answers.
+  if retryElapsed >= 0.25 and next(unresolved) and retryCount < 60 then
     retryElapsed = 0
     retryCount = retryCount + 1
     retryUnresolvedItems()
+  end
+
+  if warmupElapsed >= 0.12 and next(unresolved) then
+    warmupElapsed = 0
+    warmupNextItem()
   end
 
   if searchPending and searchElapsed >= 0.45 then
@@ -797,6 +859,7 @@ addon:SetScript("OnEvent", function(_, event, itemId, success)
     if success ~= false and itemId and unresolved[itemId] and catalog[itemId] then
       if addCatalogItem(itemId) then
         refreshGrid()
+        setCatalogStatus()
       end
     end
     if refreshSlotButtons then
