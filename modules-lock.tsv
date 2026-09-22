@@ -28,5 +28,5 @@ mod-playerbots	compat/core-chat-api-20260920	b0687c2323e55edb35437ed8a1077de2d8c
 mod-pvp-titles	master	2c7c16a4ff504cb43d60919552581833d7efcb05	https://github.com/azerothcore/mod-pvp-titles.git
 mod-rdf-expansion	master	c7a91c5973cda4529495b52b89375913f98726d6	https://github.com/azerothcore/mod-rdf-expansion.git
 mod-solo-lfg	master	3821fe1d108ade8d2b7ad6611e41154e05864c65	https://github.com/azerothcore/mod-solo-lfg.git
-mod-transmog	feature/acore-wardrobe-335	3f059a7a8c0093fae63ddc22762ba1c84b778e86	https://github.com/Soricela/mod-transmog.git
+mod-transmog	feature/acore-wardrobe-335	d7cd861800d601e4c7646ec2a97047eeb3de36ce	https://github.com/Soricela/mod-transmog.git
 mod-weapon-visual	master	40884a89c4f40dd497b347242170ee4bf4ec29bd	https://github.com/azerothcore/mod-weapon-visual.git
