@@ -38,6 +38,7 @@ local resultMessages = {
 }
 
 local collection = {}
+local catalogOrder = {}
 local active = {}
 local pending = {}
 local catalog = {}
@@ -49,10 +50,34 @@ local page = 1
 local pageSize = 30
 local hasMorePages = false
 local exploreMode = false
+local qualityFilter = 0
+local sortOrder = 0
+local catalogTotal = 0
 local updateElapsed = 0
 local retryElapsed = 0
 local retryCount = 0
+local searchElapsed = 0
+local searchPending = false
 local requestSync
+local refreshSlotButtons
+
+local qualityLabels = {
+  [0] = "Todas las calidades",
+  [1] = "Común",
+  [2] = "Poco común",
+  [3] = "Rara",
+  [4] = "Épica",
+  [5] = "Legendaria",
+  [6] = "Artefacto",
+  [7] = "Reliquia",
+}
+
+local sortLabels = {
+  [0] = "ID",
+  [1] = "Nombre",
+  [2] = "Calidad",
+  [3] = "Nivel",
+}
 
 local function clear(target)
   for key in pairs(target) do
@@ -66,6 +91,17 @@ end
 
 local function currentSlot()
   return categories[currentCategory].slot
+end
+
+local function catalogSearchToken()
+  local search = trim(addon.window and addon.window.search:GetText() or "")
+  search = string.lower(search)
+  search = string.gsub(search, "%s+", "+")
+  search = string.gsub(search, "[^%w%+%-]", "")
+  if search == "" then
+    return "-"
+  end
+  return string.sub(search, 1, 32)
 end
 
 local function queueCommand(command)
@@ -126,21 +162,24 @@ end
 
 local function addCatalogItem(itemId)
   local name, link, quality, _, _, _, _, _, equipLoc, texture = GetItemInfo(itemId)
-  if not name or not equipLoc or equipLoc == "" then
-    unresolved[itemId] = true
-    return false
-  end
 
   catalog[itemId] = {
     id = itemId,
-    name = name,
-    link = link,
+    name = name or ("Objeto " .. itemId),
+    link = link or ("item:" .. itemId),
     quality = quality or 1,
     equipLoc = equipLoc,
     texture = texture,
   }
-  unresolved[itemId] = nil
-  return true
+  if name then
+    unresolved[itemId] = nil
+    return true
+  end
+
+  -- The server has already filtered this page by slot.  Keep the button visible
+  -- while the 3.3.5 client fetches item data instead of dropping it locally.
+  unresolved[itemId] = true
+  return false
 end
 
 local function refreshGrid()
@@ -149,27 +188,21 @@ local function refreshGrid()
   end
 
   clear(filtered)
-  local category = categories[currentCategory]
-  local search = string.lower(trim(addon.window.search:GetText()))
-
-  for _, item in pairs(catalog) do
-    if itemMatchesCategory(item, category) and
-        (search == "" or string.find(string.lower(item.name), search, 1, true)) then
-      table.insert(filtered, item)
+  for _, itemId in ipairs(catalogOrder) do
+    if catalog[itemId] then
+      table.insert(filtered, catalog[itemId])
     end
   end
 
-  table.sort(filtered, function(left, right)
-    if left.name == right.name then
-      return left.id < right.id
-    end
-    return left.name < right.name
-  end)
-
-  addon.window.pageText:SetFormattedText("Página %d%s", page, hasMorePages and " / …" or "")
-  addon.window.countText:SetFormattedText("Apariencias: %d", #filtered)
+  local maxPage = math.max(1, math.ceil(catalogTotal / pageSize))
+  addon.window.pageText:SetFormattedText("Página %d / %d", page, maxPage)
+  addon.window.countText:SetFormattedText("Apariencias: %d / %d", #filtered, catalogTotal)
   addon.window.previous:SetEnabled(page > 1)
   addon.window.next:SetEnabled(hasMorePages)
+
+  if refreshSlotButtons then
+    refreshSlotButtons()
+  end
 
   for index, button in ipairs(addon.window.itemButtons) do
     local item = filtered[index]
@@ -191,7 +224,7 @@ end
 local function buildCatalog()
   clear(catalog)
   clear(unresolved)
-  for itemId in pairs(collection) do
+  for _, itemId in ipairs(catalogOrder) do
     addCatalogItem(itemId)
   end
   retryCount = 0
@@ -260,18 +293,20 @@ end
 local function requestCatalog(targetPage)
   page = math.max(1, targetPage or 1)
   clear(collection)
+  clear(catalogOrder)
   clear(catalog)
   clear(filtered)
   clear(unresolved)
   hasMorePages = false
+  catalogTotal = 0
   refreshGrid()
+  local command = exploreMode and "browse" or "catalog"
   if exploreMode then
     setStatus("Explorando apariencias de esta categoría...")
-    queueCommand(string.format(".transmog wardrobe browse %d %d", currentSlot(), page - 1))
   else
     setStatus("Cargando apariencias compatibles...")
-    queueCommand(string.format(".transmog wardrobe catalog %d %d", currentSlot(), page - 1))
   end
+  queueCommand(string.format(".transmog wardrobe %s %d %d %d %d %s", command, currentSlot(), page - 1, qualityFilter, sortOrder, catalogSearchToken()))
 end
 
 requestSync = function()
@@ -284,7 +319,7 @@ local function createItemButton(parent, index)
   button:SetSize(58, 58)
   local column = (index - 1) % 6
   local row = math.floor((index - 1) / 6)
-  button:SetPoint("TOPLEFT", parent, "TOPLEFT", 424 + column * 68, -180 - row * 68)
+  button:SetPoint("TOPLEFT", parent, "TOPLEFT", 424 + column * 68, -195 - row * 68)
 
   local background = button:CreateTexture(nil, "BACKGROUND")
   background:SetAllPoints()
@@ -319,7 +354,9 @@ end
 
 local function createWindow()
   local frame = CreateFrame("Frame", "AcoreWardrobeFrame", UIParent)
-  frame:SetSize(920, 610)
+  -- Leave a gap below the mouse-enabled DressUpModel.  Previously it overlapped
+  -- the action buttons and captured their upper click area.
+  frame:SetSize(920, 650)
   frame:SetPoint("CENTER")
   frame:SetFrameStrata("DIALOG")
   frame:SetMovable(true)
@@ -345,8 +382,8 @@ local function createWindow()
   close:SetPoint("TOPRIGHT", -5, -5)
 
   frame.model = CreateFrame("DressUpModel", nil, frame)
-  frame.model:SetSize(360, 455)
-  frame.model:SetPoint("TOPLEFT", 28, -105)
+  frame.model:SetSize(320, 455)
+  frame.model:SetPoint("TOPLEFT", 58, -105)
   frame.model:SetUnit("player")
   frame.model:EnableMouse(true)
   frame.model.rotation = 0
@@ -384,7 +421,9 @@ local function createWindow()
   frame.search:SetAutoFocus(false)
   frame.search:SetScript("OnTextChanged", function()
     page = 1
-    refreshGrid()
+    searchElapsed = 0
+    searchPending = true
+    setStatus("Preparando búsqueda...")
   end)
 
   local searchLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
@@ -393,6 +432,28 @@ local function createWindow()
 
   frame.countText = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
   frame.countText:SetPoint("LEFT", frame.search, "RIGHT", 18, 0)
+
+  local qualityButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+  qualityButton:SetSize(150, 22)
+  qualityButton:SetPoint("TOPLEFT", 425, -164)
+  qualityButton:SetText("Calidad: " .. qualityLabels[qualityFilter])
+  qualityButton:SetScript("OnClick", function(self)
+    qualityFilter = (qualityFilter + 1) % 8
+    self:SetText("Calidad: " .. qualityLabels[qualityFilter])
+    requestCatalog(1)
+  end)
+  frame.qualityButton = qualityButton
+
+  local sortButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+  sortButton:SetSize(120, 22)
+  sortButton:SetPoint("LEFT", qualityButton, "RIGHT", 8, 0)
+  sortButton:SetText("Orden: " .. sortLabels[sortOrder])
+  sortButton:SetScript("OnClick", function(self)
+    sortOrder = (sortOrder + 1) % 4
+    self:SetText("Orden: " .. sortLabels[sortOrder])
+    requestCatalog(1)
+  end)
+  frame.sortButton = sortButton
 
   local modeButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
   modeButton:SetSize(180, 24)
@@ -409,18 +470,101 @@ local function createWindow()
   end)
   frame.modeButton = modeButton
 
+  -- CoA-style equipment slots.  They select the catalogue category while
+  -- displaying either the pending/current transmog or the equipped item.
   frame.categoryButtons = {}
   for index, category in ipairs(categories) do
-    local button = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-    button:SetSize(104, 23)
-    local column = (index - 1) % 7
-    local row = math.floor((index - 1) / 7)
-    button:SetPoint("TOPLEFT", 55 + column * 106, -48 - row * 25)
-    button:SetText(category.label)
+    local button = CreateFrame("Button", nil, frame)
+    button:SetSize(40, 40)
+
+    local x, y
+    if index <= 9 then
+      x = 18
+      y = -118 - (index - 1) * 45
+    else
+      x = 378
+      y = -118 - (index - 10) * 45
+    end
+    button:SetPoint("TOPLEFT", x, y)
+
+    button.background = button:CreateTexture(nil, "BACKGROUND")
+    button.background:SetAllPoints()
+    button.background:SetTexture("Interface\\Buttons\\UI-Quickslot2")
+
+    button.icon = button:CreateTexture(nil, "ARTWORK")
+    button.icon:SetPoint("TOPLEFT", 5, -5)
+    button.icon:SetPoint("BOTTOMRIGHT", -5, 5)
+
+    button.selected = button:CreateTexture(nil, "OVERLAY")
+    button.selected:SetTexture("Interface\\Buttons\\CheckButtonHilight")
+    button.selected:SetBlendMode("ADD")
+    button.selected:SetAllPoints()
+    button.selected:Hide()
+
+    button.pending = button:CreateTexture(nil, "OVERLAY")
+    button.pending:SetTexture("Interface\\Buttons\\UI-CheckBox-Check")
+    button.pending:SetSize(22, 22)
+    button.pending:SetPoint("BOTTOMRIGHT", 5, -5)
+    button.pending:Hide()
+
     button:SetScript("OnClick", function()
       selectCategory(index)
     end)
+    button:SetScript("OnEnter", function(self)
+      GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+      local appearanceId = pending[category.slot] or active[category.slot]
+      local link = appearanceId and select(2, GetItemInfo(appearanceId))
+      if not link then
+        link = GetInventoryItemLink("player", category.slot + 1)
+      end
+      if link then
+        GameTooltip:SetHyperlink(link)
+      else
+        GameTooltip:SetText(category.label)
+        GameTooltip:AddLine("Seleccionar ranura", 0.7, 0.7, 0.7)
+      end
+      GameTooltip:Show()
+    end)
+    button:SetScript("OnLeave", function()
+      GameTooltip:Hide()
+    end)
     frame.categoryButtons[index] = button
+  end
+
+  refreshSlotButtons = function()
+    if not addon.window then
+      return
+    end
+
+    for index, category in ipairs(categories) do
+      local button = addon.window.categoryButtons[index]
+      local appearanceId = pending[category.slot]
+      if appearanceId == nil then
+        appearanceId = active[category.slot]
+      end
+
+      local texture
+      if appearanceId == 0 then
+        button.icon:SetTexture(nil)
+      else
+        if appearanceId and appearanceId > 0 then
+          texture = select(10, GetItemInfo(appearanceId))
+        end
+        texture = texture or GetInventoryItemTexture("player", category.slot + 1)
+        button.icon:SetTexture(texture or "Interface\\Icons\\INV_Misc_QuestionMark")
+      end
+
+      if index == currentCategory then
+        button.selected:Show()
+      else
+        button.selected:Hide()
+      end
+      if pending[category.slot] ~= nil then
+        button.pending:Show()
+      else
+        button.pending:Hide()
+      end
+    end
   end
 
   frame.itemButtons = {}
@@ -517,12 +661,24 @@ local function processProtocol(message)
       return true
     end
     clear(collection)
+    clear(catalogOrder)
     clear(catalog)
     clear(filtered)
     clear(unresolved)
     hasMorePages = false
+    catalogTotal = 0
     refreshGrid()
     setStatus("Recibiendo apariencias...")
+    return true
+  end
+
+  local totalSlot, totalPage, totalCount = string.match(message, "^WARDROBE_CATALOG_TOTAL:(%d+):(%d+):(%d+)$")
+  if totalSlot then
+    if tonumber(totalSlot) ~= currentSlot() or tonumber(totalPage) ~= page - 1 then
+      return true
+    end
+    catalogTotal = tonumber(totalCount) or 0
+    refreshGrid()
     return true
   end
 
@@ -532,7 +688,11 @@ local function processProtocol(message)
       return true
     end
     for itemId in string.gmatch(catalogPayload, "(%d+)") do
-      collection[tonumber(itemId)] = true
+      itemId = tonumber(itemId)
+      if not collection[itemId] then
+        collection[itemId] = true
+        table.insert(catalogOrder, itemId)
+      end
     end
     return true
   end
@@ -602,6 +762,9 @@ end
 addon:SetScript("OnUpdate", function(_, elapsed)
   updateElapsed = updateElapsed + elapsed
   retryElapsed = retryElapsed + elapsed
+  if searchPending then
+    searchElapsed = searchElapsed + elapsed
+  end
 
   if updateElapsed >= 0.20 and #commandQueue > 0 then
     updateElapsed = 0
@@ -613,14 +776,32 @@ addon:SetScript("OnUpdate", function(_, elapsed)
     retryCount = retryCount + 1
     retryUnresolvedItems()
   end
+
+  if searchPending and searchElapsed >= 0.45 then
+    searchPending = false
+    requestCatalog(1)
+  end
 end)
 
 addon:RegisterEvent("PLAYER_LOGIN")
 addon:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
-addon:SetScript("OnEvent", function(_, event)
+addon:RegisterEvent("GET_ITEM_INFO_RECEIVED")
+addon:SetScript("OnEvent", function(_, event, itemId, success)
   if event == "PLAYER_LOGIN" then
     AcoreWardrobeDB = AcoreWardrobeDB or {}
     createWindow()
+  elseif event == "GET_ITEM_INFO_RECEIVED" then
+    -- GetItemInfo() is asynchronous on a cold 3.3.5 client cache.  Update the
+    -- affected button as soon as the client finishes its item query instead of
+    -- waiting for the next retry tick.
+    if success ~= false and itemId and unresolved[itemId] and catalog[itemId] then
+      if addCatalogItem(itemId) then
+        refreshGrid()
+      end
+    end
+    if refreshSlotButtons then
+      refreshSlotButtons()
+    end
   elseif addon.window and addon.window:IsShown() then
     refreshModel()
     requestSync()
