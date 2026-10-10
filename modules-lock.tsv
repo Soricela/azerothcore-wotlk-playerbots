@@ -15,7 +15,7 @@ mod-fly-anywhere	main	d8c8ea76bb7ef6aea395527ec42aff43c6e02799	https://github.co
 mod-gain-honor-guard	master	db8de7481c849acb5ec394b28fe75b29b1151856	https://github.com/azerothcore/mod-gain-honor-guard.git
 mod-guildhouse	master	0b3cc14e947a859f8a7751a10676107d6316275b	https://github.com/azerothcore/mod-guildhouse.git
 mod-low-level-rbg	custom/playerbot	ad88b99a8f947ebda2ecb0fbd0326ba03f407e3b	https://github.com/Soricela/mod-low-level-rbg.git
-mod-mythic-plus	compat/acore-sql-layout-20260920	c02567ff29aa497c31a8c45e289e667ad2755154	https://github.com/Soricela/mod-mythic-plus.git
+mod-mythic-plus	compat/acore-sql-layout-20260920	3e6edf1dc3d1147925cfcafbc0d062674758be60	https://github.com/Soricela/mod-mythic-plus.git
 mod-npc-all-mounts	master	c6899d4cafb4539b4dd326e8a3811fa0fdc91423	https://github.com/azerothcore/mod-npc-all-mounts.git
 mod-npc-buffer	master	532a6ba80c31b673338fcdb747cb2226bec4887e	https://github.com/azerothcore/mod-npc-buffer.git
 mod-npc-enchanter	master	af32add66eafc0e0eb8775999e76ceed75f18b74	https://github.com/azerothcore/mod-npc-enchanter.git
