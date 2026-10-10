@@ -146,3 +146,24 @@ __pycache__/
 *.bak
 *.bak-*
 *:Zone.Identifier
+
+# Paquetes locales COA
+/COA_*/
+/coa_*/
+
+# Modulos COA mantenidos en este repositorio
+!/modules/
+!/modules/mod-coa-atalzul-335/
+!/modules/mod-coa-atalzul-335/**
+!/modules/mod-coa-board-335/
+!/modules/mod-coa-board-335/**
+!/modules/mod-coa-content-335/
+!/modules/mod-coa-content-335/**
+!/modules/mod-coa-setis-335/
+!/modules/mod-coa-setis-335/**
+
+# Auxiliares locales de los modulos COA
+/modules/mod-coa-*/**/*:Zone.Identifier
+/modules/mod-coa-*/**/*backup*
+/modules/mod-coa-*/**/*.bak
+/modules/mod-coa-*/**/*.log
