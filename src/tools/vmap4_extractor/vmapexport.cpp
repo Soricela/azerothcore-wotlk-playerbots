@@ -22,6 +22,9 @@
 #include <map>
 #include <sys/stat.h>
 #include <vector>
+#include <fstream>
+#include <limits>
+#include <cstdlib>
 
 #if defined(WIN32) || defined(_WIN32)
 #include <Windows.h>
@@ -60,6 +63,8 @@ uint32 map_count;
 char output_path[128] = ".";
 char input_path[1024] = ".";
 bool hasInputPathParam = false;
+int COA_map_id = -1;
+std::string COA_archive_list;
 bool preciseVectorData = false;
 std::unordered_map<std::string, WMODoodadData> WmoDoodads;
 
@@ -199,7 +204,7 @@ bool ExtractSingleWmo(std::string& fname)
     // Delete the extracted file in the case of an error
     if (!file_ok)
         remove(szLocalFile);
-    return true;
+    return file_ok;
 }
 
 void ParsMapFiles()
@@ -208,6 +213,7 @@ void ParsMapFiles()
     //char id_filename[64];
     for (unsigned int i = 0; i < map_count; ++i)
     {
+        if (COA_map_id >= 0 && map_ids[i].id != static_cast<uint32>(COA_map_id)) continue;
         sprintf(fn,"World\\Maps\\%s\\%s.wdt", map_ids[i].name, map_ids[i].name);
         WDTFile WDT(fn,map_ids[i].name);
         if (WDT.init(map_ids[i].id))
@@ -219,8 +225,15 @@ void ParsMapFiles()
                 {
                     if (ADTFile* ADT = WDT.GetMap(x, y))
                     {
+                        if (COA_map_id >= 0)
+                        {
+                            char terrain[128];
+                            snprintf(terrain, sizeof(terrain), "./maps/%03u%02d%02d.map", map_ids[i].id, y, x);
+                            if (!FileExists(terrain)) { delete ADT; continue; }
+                        }
                         //sprintf(id_filename,"%02u %02u %03u",x,y,map_ids[i].id);//!!!!!!!!!
-                        ADT->init(map_ids[i].id, x, y);
+                        if (!ADT->init(map_ids[i].id, x, y) && COA_map_id >= 0)
+                        { printf("COA_ERROR: ADT or WMO extraction failed at %d,%d\n", x, y); delete ADT; exit(1); }
                         delete ADT;
                     }
                 }
@@ -229,6 +242,7 @@ void ParsMapFiles()
             }
             printf("]\n");
         }
+        else if (COA_map_id >= 0) { printf("COA_ERROR: WDT missing or invalid\n"); exit(1); }
     }
 }
 
@@ -370,7 +384,20 @@ bool processArgv(int argc, char** argv, char const* versionString)
 
     for (int i = 1; i < argc; ++i)
     {
-        if (strcmp("-s", argv[i]) == 0)
+        if (strcmp("-m", argv[i]) == 0)
+        {
+            if (++i >= argc) return false;
+            char* end = nullptr;
+            unsigned long id = std::strtoul(argv[i], &end, 10);
+            if (!*argv[i] || *argv[i] == '-' || *end || id > static_cast<unsigned long>(std::numeric_limits<int>::max())) return false;
+            COA_map_id = static_cast<int>(id);
+        }
+        else if (strcmp("-p", argv[i]) == 0)
+        {
+            if (++i >= argc) return false;
+            COA_archive_list = argv[i];
+        }
+        else if (strcmp("-s", argv[i]) == 0)
         {
             preciseVectorData = false;
         }
@@ -379,6 +406,7 @@ bool processArgv(int argc, char** argv, char const* versionString)
             if ((i + 1) < argc)
             {
                 hasInputPathParam = true;
+                if (!*argv[i + 1] || strlen(argv[i + 1]) >= sizeof(input_path) - 1) return false;
                 strcpy(input_path, argv[i + 1]);
                 if (input_path[strlen(input_path) - 1] != '\\' && input_path[strlen(input_path) - 1] != '/')
                     strcat(input_path, "/");
@@ -406,7 +434,7 @@ bool processArgv(int argc, char** argv, char const* versionString)
     if (!result)
     {
         printf("Extract %s.\n", versionString);
-        printf("%s [-?][-s][-l][-d <path>]\n", argv[0]);
+        printf("%s [-?][-s][-l][-d <path>][-m mapID][-p archive-list]\n", argv[0]);
         printf("   -s : (default) small size (data size optimization), ~500MB less vmap data.\n");
         printf("   -l : large size, ~500MB more vmap data. (might contain more details)\n");
         printf("   -d <path>: Path to the vector data source folder.\n");
@@ -460,12 +488,32 @@ int main(int argc, char** argv)
 
     // prepare archive name list
     std::vector<std::string> archiveNames;
-    fillArchiveNameVector(archiveNames);
+    if (COA_archive_list.empty())
+    {
+        if (!fillArchiveNameVector(archiveNames)) return 1;
+    }
+    else
+    {
+        std::ifstream list(COA_archive_list);
+        if (!list) { printf("COA_ERROR: Cannot read archive list\n"); return 1; }
+        std::string name;
+        while (std::getline(list, name))
+        {
+            if (!name.empty() && name.back() == '\r') name.pop_back();
+            if (name.empty() || name[0] == '#') continue;
+            if (!FileExists(name.c_str())) { printf("COA_ERROR: Missing archive %s\n", name.c_str()); return 1; }
+            archiveNames.push_back(name);
+        }
+        if (archiveNames.empty()) return 1;
+    }
     for (auto & archiveName : archiveNames)
     {
         MPQArchive* archive = new MPQArchive(archiveName.c_str());
         if (gOpenArchives.empty() || gOpenArchives.front() != archive)
+        {
             delete archive;
+            if (!COA_archive_list.empty()) { printf("COA_ERROR: Required archive could not open\n"); return 1; }
+        }
     }
 
     if (gOpenArchives.empty())
@@ -506,10 +554,17 @@ int main(int argc, char** argv)
         }
 
         delete dbc;
+        if (COA_map_id >= 0)
+        {
+            bool found = false;
+            for (const auto& map : map_ids) if (map.id == static_cast<uint32>(COA_map_id)) found = true;
+            if (!found) { printf("COA_ERROR: Map absent from Map.dbc\n"); return 1; }
+        }
         ParsMapFiles();
         //nError = ERROR_SUCCESS;
         // Extract models, listed in DameObjectDisplayInfo.dbc
-        ExtractGameobjectModels();
+        if (COA_map_id < 0) ExtractGameobjectModels();
+        else printf("COA: Global gameobject model extraction skipped for isolated map\n");
     }
 
     printf("\n");

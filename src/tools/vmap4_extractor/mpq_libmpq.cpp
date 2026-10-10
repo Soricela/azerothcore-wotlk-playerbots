@@ -24,6 +24,7 @@ ArchiveSet gOpenArchives;
 
 MPQArchive::MPQArchive(char const* filename)
 {
+    coaSourceName = filename;
     int result = libmpq__archive_open(&mpq_a, filename, -1);
     printf("Opening %s\n", filename);
     if (result)
@@ -77,6 +78,7 @@ MPQFile::MPQFile(char const* filename):
 
         uint32 filenum;
         if (libmpq__file_number(mpq_a, filename, &filenum)) continue;
+        printf("COA_SOURCE: %s <- %s\n", filename, gOpenArchive->coaSourceName.c_str());
         libmpq__off_t transferred;
         libmpq__file_unpacked_size(mpq_a, filenum, &size);
 

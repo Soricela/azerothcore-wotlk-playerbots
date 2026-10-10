@@ -1,0 +1,1 @@
+AC_ADD_SCRIPT("${CMAKE_CURRENT_LIST_DIR}/src/CoAContent335.cpp")

@@ -31,6 +31,7 @@ class MPQArchive
 {
 public:
     mpq_archive_s* mpq_a;
+    std::string coaSourceName;
 
     MPQArchive(char const* filename);
     ~MPQArchive() { if (isOpened()) close(); }

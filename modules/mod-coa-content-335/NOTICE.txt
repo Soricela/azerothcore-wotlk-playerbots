@@ -1,0 +1,6 @@
+Adapted from AzerothCore / jealous-sound/azerothcore-wotlk-coa.
+Source file: src/server/coa/AscensionAdventurerCache.cpp
+Revision: 006900e2c20574b45cc094dc4d46e78766612531
+Original file notice: Copyright (C) 2016+ AzerothCore, GNU AGPL v3.
+License text: https://www.gnu.org/licenses/agpl-3.0.txt
+Modifications: native WotLK loot hook; no Ascension API, custom spell or automatic mail dependency.

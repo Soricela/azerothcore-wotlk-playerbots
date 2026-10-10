@@ -1,8 +1,9 @@
 ## Interface: 30300
 ## Title: AzerothCore Wardrobe
-## Notes: Wardrobe interface for mod-transmog
+## Notes: Apariencias y conjuntos personales
 ## Author: Soricela
-## Version: 0.1.0
+## Version: 1.1.0
 ## SavedVariablesPerCharacter: AcoreWardrobeDB
 
 Core.lua
+Outfits.lua

@@ -21,6 +21,8 @@
 #include <cstdlib>
 #include <deque>
 #include <filesystem>
+#include <fstream>
+#include <limits>
 #include <set>
 #include <unordered_map>
 #include <cstring>
@@ -75,6 +77,8 @@ std::unordered_map<uint32, LiquidTypeEntry> LiquidTypes;
 #define MAX_PATH_LENGTH 128
 char output_path[MAX_PATH_LENGTH] = ".";
 char input_path[MAX_PATH_LENGTH] = ".";
+std::string COA_patch_list;
+int COA_map_id = -1;
 
 // **************************************************
 // Extractor options
@@ -158,6 +162,8 @@ void Usage(char* prg)
     printf(
         "Usage:\n"\
         "%s -[var] [value]\n"\
+        "-m extract one map ID\n"\
+        "-p additional MPQ list, one absolute path per line; last wins\n"\
         "-i set input path\n"\
         "-o set output path\n"\
         "-e extract only MAP(1)/DBC(2)/Camera(4) - standard: all(7)\n"\
@@ -182,6 +188,20 @@ void HandleArgs(int argc, char* arg[])
 
         switch (arg[c][1])
         {
+            case 'm':
+            {
+                if (c + 1 >= argc) Usage(arg[0]);
+                char* end = nullptr;
+                const char* value = arg[++c];
+                unsigned long id = std::strtoul(value, &end, 10);
+                if (!*value || value[0] == '-' || *end || id > static_cast<unsigned long>(std::numeric_limits<int>::max())) Usage(arg[0]);
+                COA_map_id = static_cast<int>(id);
+                break;
+            }
+            case 'p':
+                if (c + 1 >= argc) Usage(arg[0]);
+                COA_patch_list = arg[++c];
+                break;
             case 'i':
                 if (c + 1 < argc)                           // all ok
                 {
@@ -228,6 +248,8 @@ void HandleArgs(int argc, char* arg[])
                     Usage(arg[0]);
                 }
                 break;
+            default:
+                Usage(arg[0]);
         }
     }
 }
@@ -983,6 +1005,13 @@ void ExtractMapsFromMpq(uint32 build)
 
     uint32 map_count = ReadMapDBC();
 
+    if (COA_map_id >= 0)
+    {
+        bool found = false;
+        for (const auto& map : map_ids) if (map.id == static_cast<uint32>(COA_map_id)) found = true;
+        if (!found) { printf("Requested map %d absent from effective Map.dbc\n", COA_map_id); exit(1); }
+    }
+    uint32 coaConverted = 0, coaFailed = 0;
     ReadLiquidTypeTableDBC();
 
     std::string path = output_path;
@@ -992,13 +1021,14 @@ void ExtractMapsFromMpq(uint32 build)
     printf("Convert map files\n");
     for (uint32 z = 0; z < map_count; ++z)
     {
+        if (COA_map_id >= 0 && map_ids[z].id != static_cast<uint32>(COA_map_id)) continue;
         printf("Extract %s (%d/%u)                  \n", map_ids[z].name, z + 1, map_count);
         // Loadup map grid data
         mpqMapName = Acore::StringFormat(R"(World\Maps\{}\{}.wdt)", map_ids[z].name, map_ids[z].name);
         WDT_file wdt;
         if (!wdt.loadFile(mpqMapName, false))
         {
-            //            printf("Error loading %s map wdt data\n", map_ids[z].name);
+            if (COA_map_id >= 0) { printf("Missing or invalid WDT: %s\n", mpqMapName.c_str()); exit(1); }
             continue;
         }
 
@@ -1010,13 +1040,15 @@ void ExtractMapsFromMpq(uint32 build)
                     continue;
                 mpqFileName = Acore::StringFormat(R"(World\Maps\{}\{}_{}_{}.adt)", map_ids[z].name, map_ids[z].name, x, y);
                 outputFileName = Acore::StringFormat("{}/maps/{:03}{:02}{:02}.map", output_path, map_ids[z].id, y, x);
-                ConvertADT(mpqFileName, outputFileName, y, x, build);
+                if (ConvertADT(mpqFileName, outputFileName, y, x, build)) ++coaConverted;
+                else ++coaFailed;
             }
             // draw progress bar
             printf("Processing........................%d%%\r", (100 * (y + 1)) / WDT_MAP_SIZE);
         }
     }
-    printf("\n");
+    printf("\nConverted tiles: %u; failed tiles: %u\n", coaConverted, coaFailed);
+    if (COA_map_id >= 0 && (!coaConverted || coaFailed)) exit(1);
 }
 
 bool ExtractFile( char const* mpq_name, std::string const& filename )
@@ -1172,6 +1204,23 @@ void LoadCommonMPQFiles()
     }
 }
 
+void LoadCOAPatchFiles()
+{
+    if (COA_patch_list.empty()) return;
+    std::ifstream list(COA_patch_list);
+    if (!list) { printf("Cannot read MPQ list\n"); exit(1); }
+    std::string path;
+    while (std::getline(list, path))
+    {
+        if (!path.empty() && path.back() == '\r') path.pop_back();
+        if (path.empty() || path[0] == '#') continue;
+        if (!FileExists(path.c_str())) { printf("Missing MPQ: %s\n", path.c_str()); exit(1); }
+        auto count = gOpenArchives.size();
+        new MPQArchive(path.c_str());
+        if (gOpenArchives.size() != count + 1) { printf("Cannot open required MPQ: %s\n", path.c_str()); exit(1); }
+    }
+}
+
 inline void CloseMPQFiles()
 {
     for (auto & gOpenArchive : gOpenArchives) gOpenArchive->close();
@@ -1226,7 +1275,7 @@ int main(int argc, char* arg[])
     if (FirstLocale < 0)
     {
         printf("No locales detected\n");
-        return 0;
+        return 1;
     }
 
     if (CONF_extract & EXTRACT_CAMERA)
@@ -1236,6 +1285,7 @@ int main(int argc, char* arg[])
         // Open MPQs
         LoadLocaleMPQFiles(FirstLocale);
         LoadCommonMPQFiles();
+        LoadCOAPatchFiles();
 
         ExtractCameraFiles(FirstLocale, true);
         // Close MPQs
@@ -1249,6 +1299,7 @@ int main(int argc, char* arg[])
         // Open MPQs
         LoadLocaleMPQFiles(FirstLocale);
         LoadCommonMPQFiles();
+        LoadCOAPatchFiles();
 
         // Extract maps
         ExtractMapsFromMpq(build);

@@ -59,10 +59,11 @@ local retryCount = 0
 local warmupElapsed = 0
 local warmupIndex = 1
 local warmupTooltip
-local searchElapsed = 0
-local searchPending = false
 local requestSync
 local refreshSlotButtons
+local outfitSyncReady = false
+local applying = {}
+local applyElapsed = 0
 
 local qualityLabels = {
   [0] = "Todas las calidades",
@@ -88,23 +89,14 @@ local function clear(target)
   end
 end
 
-local function trim(value)
-  return string.match(value or "", "^%s*(.-)%s*$")
-end
-
 local function currentSlot()
   return categories[currentCategory].slot
 end
 
 local function catalogSearchToken()
-  local search = trim(addon.window and addon.window.search:GetText() or "")
-  search = string.lower(search)
-  search = string.gsub(search, "%s+", "+")
-  search = string.gsub(search, "[^%w%+%-]", "")
-  if search == "" then
-    return "-"
-  end
-  return string.sub(search, 1, 32)
+  -- Search was useful for diagnosis but steals the limited 3.3.5 UI space.
+  -- Keep the protocol argument neutral; catalogue filtering remains quality/sort.
+  return "-"
 end
 
 local function queueCommand(command)
@@ -145,6 +137,7 @@ local function refreshModel()
     end
     if replacement and replacement > 0 then
       local _, link = GetItemInfo(replacement)
+      link = link or ("item:" .. replacement)
       if link then
         model:TryOn(link)
       end
@@ -154,6 +147,7 @@ local function refreshModel()
   for slot, itemId in pairs(pending) do
     if active[slot] == nil and itemId > 0 then
       local _, link = GetItemInfo(itemId)
+      link = link or ("item:" .. itemId)
       if link then
         model:TryOn(link)
       end
@@ -279,6 +273,7 @@ local function selectCategory(index)
 end
 
 local function selectItem(item)
+  if next(applying) then return end
   if not item then
     return
   end
@@ -289,8 +284,11 @@ local function selectItem(item)
 end
 
 local function applyPending()
+  if next(applying) then return end
+  applyElapsed = 0
   local count = 0
   for slot, itemId in pairs(pending) do
+    applying[slot] = itemId
     if itemId == 0 then
       queueCommand(string.format(".transmog wardrobe remove %d", slot))
     else
@@ -307,6 +305,7 @@ local function applyPending()
 end
 
 local function cancelPending()
+  if next(applying) then return end
   clear(pending)
   refreshModel()
   refreshGrid()
@@ -314,6 +313,7 @@ local function cancelPending()
 end
 
 local function removeCurrentSlot()
+  if next(applying) then return end
   pending[currentSlot()] = 0
   refreshModel()
   refreshGrid()
@@ -321,6 +321,7 @@ local function removeCurrentSlot()
 end
 
 local function requestCatalog(targetPage)
+  outfitSyncReady = false
   page = math.max(1, targetPage or 1)
   clear(collection)
   clear(catalogOrder)
@@ -340,16 +341,17 @@ local function requestCatalog(targetPage)
 end
 
 requestSync = function()
+  outfitSyncReady = false
   clear(active)
   requestCatalog(1)
 end
 
 local function createItemButton(parent, index)
   local button = CreateFrame("Button", nil, parent)
-  button:SetSize(58, 58)
+  button:SetSize(72, 72)
   local column = (index - 1) % 6
   local row = math.floor((index - 1) / 6)
-  button:SetPoint("TOPLEFT", parent, "TOPLEFT", 424 + column * 68, -195 - row * 68)
+  button:SetPoint("TOPLEFT", parent, "TOPLEFT", 490 + column * 88, -190 - row * 88)
 
   local background = button:CreateTexture(nil, "BACKGROUND")
   background:SetAllPoints()
@@ -392,7 +394,7 @@ local function createWindow()
   local frame = CreateFrame("Frame", "AcoreWardrobeFrame", UIParent)
   -- Leave a gap below the mouse-enabled DressUpModel.  Previously it overlapped
   -- the action buttons and captured their upper click area.
-  frame:SetSize(920, 650)
+  frame:SetSize(1180, 700)
   frame:SetPoint("CENTER")
   frame:SetFrameStrata("DIALOG")
   frame:SetMovable(true)
@@ -451,27 +453,33 @@ local function createWindow()
   modelBorder:SetPoint("BOTTOMRIGHT", frame.model, 5, -5)
   modelBorder:SetBackdrop({ edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 16 })
 
-  frame.search = CreateFrame("EditBox", nil, frame, "InputBoxTemplate")
-  frame.search:SetSize(240, 24)
-  frame.search:SetPoint("TOPLEFT", 425, -135)
-  frame.search:SetAutoFocus(false)
-  frame.search:SetScript("OnTextChanged", function()
-    page = 1
-    searchElapsed = 0
-    searchPending = true
-    setStatus("Preparando búsqueda...")
-  end)
+  frame.collectionPanel = CreateFrame("Frame", nil, frame)
+  frame.collectionPanel:SetPoint("TOPLEFT", 440, -84)
+  frame.collectionPanel:SetPoint("BOTTOMRIGHT", -28, 38)
+  frame.collectionPanel:SetBackdrop({
+    bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+    edgeSize = 16,
+    insets = { left = 7, right = 7, top = 7, bottom = 7 },
+  })
+  frame.collectionPanel:SetBackdropColor(0.05, 0.04, 0.03, 0.96)
 
-  local searchLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-  searchLabel:SetPoint("BOTTOMLEFT", frame.search, "TOPLEFT", 2, 4)
-  searchLabel:SetText("Buscar en esta página")
+  local collectionTitle = frame.collectionPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  collectionTitle:SetPoint("TOPLEFT", 16, -14)
+  collectionTitle:SetText("Colección de apariencias")
+
+  frame.collectionPlaceholder = frame.collectionPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+  frame.collectionPlaceholder:SetPoint("CENTER", 0, 0)
+  frame.collectionPlaceholder:SetWidth(520)
+  frame.collectionPlaceholder:SetJustifyH("CENTER")
+  frame.collectionPlaceholder:Hide()
 
   frame.countText = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-  frame.countText:SetPoint("LEFT", frame.search, "RIGHT", 18, 0)
+  frame.countText:SetPoint("LEFT", frame, "TOPLEFT", 675, -112)
 
   local qualityButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
   qualityButton:SetSize(150, 22)
-  qualityButton:SetPoint("TOPLEFT", 425, -164)
+  qualityButton:SetPoint("TOPLEFT", 490, -145)
   qualityButton:SetText("Calidad: " .. qualityLabels[qualityFilter])
   qualityButton:SetScript("OnClick", function(self)
     qualityFilter = (qualityFilter + 1) % 8
@@ -493,7 +501,7 @@ local function createWindow()
 
   local modeButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
   modeButton:SetSize(180, 24)
-  modeButton:SetPoint("TOPLEFT", 425, -105)
+  modeButton:SetPoint("TOPLEFT", 490, -105)
   modeButton:SetText("Modo: compatibles")
   modeButton:SetScript("OnClick", function(self)
     exploreMode = not exploreMode
@@ -505,6 +513,42 @@ local function createWindow()
     requestCatalog(1)
   end)
   frame.modeButton = modeButton
+
+  frame.tabs = {}
+  local activeTab = "Items"
+  local function setTab(label)
+    activeTab = label
+    for name, tab in pairs(frame.tabs) do
+      if name == label then tab:LockHighlight() else tab:UnlockHighlight() end
+    end
+  end
+  local function showCollectionMessage(label)
+    frame.SetCatalogVisible(false)
+    frame.collectionPlaceholder:SetText(label .. " estará disponible en una siguiente fase.\n\nLa interfaz ya está preparada; falta conectar la colección y la acción de servidor.")
+    frame.collectionPlaceholder:Show()
+  end
+  local tabs = {
+    { "Items", 490, function()
+        if AcoreWardrobeOutfitPanel and AcoreWardrobeOutfitPanel:IsShown() then AcoreWardrobeOutfitPanel:Hide() end
+        frame.collectionPlaceholder:Hide(); frame.SetCatalogVisible(true); setTab("Items")
+      end },
+    { "Pets", 585, function() setTab("Pets"); showCollectionMessage("Mascotas") end },
+    { "Mounts", 680, function() setTab("Mounts"); showCollectionMessage("Monturas") end },
+    { "Cosméticos", 775, function() setTab("Cosméticos"); showCollectionMessage("Cosméticos") end },
+    { "Outfits", 890, function()
+        setTab("Outfits")
+        if AcoreWardrobeOutfitPanel then AcoreWardrobeOutfitPanel:Show() else setStatus("Cargando pestaña de conjuntos...") end
+      end },
+  }
+  for _, info in ipairs(tabs) do
+    local tab = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+    tab:SetSize(info[1] == "Cosméticos" and 105 or 85, 25)
+    tab:SetPoint("TOPLEFT", info[2], -52)
+    tab:SetText(info[1])
+    tab:SetScript("OnClick", info[3])
+    frame.tabs[info[1]] = tab
+  end
+  setTab(activeTab)
 
   -- CoA-style equipment slots.  They select the catalogue category while
   -- displaying either the pending/current transmog or the equipped item.
@@ -633,6 +677,19 @@ local function createWindow()
   frame.pageText = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
   frame.pageText:SetPoint("CENTER", previous, "RIGHT", 51, 0)
 
+  frame.SetCatalogVisible = function(visible)
+    local controls = { frame.countText, frame.qualityButton, frame.sortButton, frame.modeButton, frame.previous, frame.next, frame.pageText }
+    for _, control in ipairs(controls) do
+      if visible then control:Show() else control:Hide() end
+    end
+    if visible then
+      frame.collectionPlaceholder:Hide()
+      refreshGrid()
+    else
+      for _, itemButton in ipairs(frame.itemButtons) do itemButton:Hide() end
+    end
+  end
+
   local apply = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
   apply:SetSize(110, 28)
   apply:SetPoint("BOTTOMLEFT", 40, 48)
@@ -671,6 +728,7 @@ local function processProtocol(message)
     if tonumber(syncBeginSlot) ~= currentSlot() then
       return true
     end
+    outfitSyncReady = false
     clear(active)
     setStatus("Recibiendo equipo...")
     return true
@@ -681,6 +739,7 @@ local function processProtocol(message)
     if tonumber(syncEndSlot) ~= currentSlot() then
       return true
     end
+    outfitSyncReady = true
     refreshModel()
     return true
   end
@@ -739,6 +798,7 @@ local function processProtocol(message)
       return true
     end
     hasMorePages = tonumber(catalogMore) == 1
+    outfitSyncReady = true
     buildCatalog()
     if next(collection) then
       setCatalogStatus()
@@ -754,10 +814,12 @@ local function processProtocol(message)
   if resultSlot then
     local slot = tonumber(resultSlot)
     local numericCode = tonumber(resultCode)
+    local requested = applying[slot]
+    applying[slot] = nil
     if numericCode == 1 then
-      active[slot] = pending[slot]
+      active[slot] = requested or pending[slot]
       pending[slot] = nil
-    elseif numericCode == 9 then
+    elseif numericCode == 9 or numericCode == 10 then
       active[slot] = nil
       pending[slot] = nil
     end
@@ -813,12 +875,17 @@ local function warmupNextItem()
 end
 
 addon:SetScript("OnUpdate", function(_, elapsed)
+  if next(applying) then
+    applyElapsed = applyElapsed + elapsed
+    if applyElapsed > 20 then
+      clear(applying)
+      requestSync()
+      setStatus("Respuesta incompleta. Comprueba el equipo antes de volver a aplicar.", true)
+    end
+  end
   updateElapsed = updateElapsed + elapsed
   retryElapsed = retryElapsed + elapsed
   warmupElapsed = warmupElapsed + elapsed
-  if searchPending then
-    searchElapsed = searchElapsed + elapsed
-  end
 
   if updateElapsed >= 0.20 and #commandQueue > 0 then
     updateElapsed = 0
@@ -839,10 +906,6 @@ addon:SetScript("OnUpdate", function(_, elapsed)
     warmupNextItem()
   end
 
-  if searchPending and searchElapsed >= 0.45 then
-    searchPending = false
-    requestCatalog(1)
-  end
 end)
 
 addon:RegisterEvent("PLAYER_LOGIN")
@@ -885,3 +948,60 @@ SlashCmdList.ACOREWARDROBE = function()
     addon.window:Show()
   end
 end
+
+-- Small interface for the optional saved-outfits panel. Server remains v0.9.0.
+AcoreWardrobeOutfitAPI = {
+  Window = function() return addon.window end,
+  SetCatalogHeaderVisible = function(visible)
+    local window = addon.window
+    if not window then return end
+    if window.SetCatalogVisible then
+      window.SetCatalogVisible(visible)
+    elseif visible then
+      window.countText:Show()
+    else
+      window.countText:Hide()
+    end
+  end,
+  Capture = function()
+    if not outfitSyncReady or #commandQueue > 0 or next(applying) then
+      return nil, "Espera a que termine la sincronización y la aplicación."
+    end
+    local pieces = {}
+    for _, category in ipairs(categories) do
+      local slot = category.slot
+      local link = GetInventoryItemLink("player", slot + 1)
+      if link then
+        local id = pending[slot]
+        if id == nil then id = active[slot] end
+        if id == nil or id == 0 then
+          id = tonumber(string.match(link, "item:(%d+)"))
+        end
+        if id and id > 0 then pieces[slot] = id end
+      end
+    end
+    if not next(pieces) then return nil, "No hay apariencias equipadas para guardar." end
+    return pieces
+  end,
+  Preview = function(pieces)
+    if not outfitSyncReady or #commandQueue > 0 or next(applying) then
+      return nil, "Espera a que termine la sincronización y la aplicación."
+    end
+    clear(pending)
+    local count, skipped = 0, 0
+    for _, category in ipairs(categories) do
+      local slot = category.slot
+      local id = pieces[slot]
+      if type(id) == "number" and id > 0 then
+        if GetInventoryItemLink("player", slot + 1) then
+          pending[slot] = id
+          count = count + 1
+        else skipped = skipped + 1 end
+      end
+    end
+    refreshModel()
+    refreshGrid()
+    setStatus(string.format("Conjunto: %d cambios, %d sin objeto equipado. Pulsa Aplicar.", count, skipped))
+    return true
+  end,
+}

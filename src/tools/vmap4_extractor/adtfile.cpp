@@ -151,7 +151,7 @@ bool ADTFile::init(uint32 map_num, uint32 tileX, uint32 tileY)
                     fixname2(s, strlen(s));
                     WmoInstanceNames.emplace_back(s);
 
-                    ExtractSingleWmo(path);
+                    if (!ExtractSingleWmo(path)) { fclose(dirfile); delete[] buf; return false; }
 
                     p += strlen(p) + 1;
                 }

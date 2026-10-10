@@ -86,7 +86,7 @@ bool WDTFile::init(uint32 mapId)
                     p = p + strlen(p) + 1;
                     _wmoNames.push_back(s);
 
-                    ExtractSingleWmo(path);
+                    if (!ExtractSingleWmo(path)) { fclose(dirfile); delete[] buf; return false; }
                 }
                 delete[] buf;
             }
