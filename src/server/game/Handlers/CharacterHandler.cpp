@@ -1596,6 +1596,13 @@ void WorldSession::HandleAlterAppearance(WorldPacket& recvData)
     if (bs_skinColor)
         _player->SetByteValue(PLAYER_BYTES, 0, uint8(bs_skinColor->hair_id));
 
+    if (sObjectMgr->GetCustomRaceDisplay(_player->getRace(true), _player->GetByteValue(PLAYER_BYTES_3, 0),
+        _player->GetByteValue(PLAYER_BYTES, 0), _player->GetByteValue(PLAYER_BYTES, 2)))
+    {
+        _player->InitDisplayIds();
+        _player->RestoreDisplayId();
+    }
+
     _player->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_VISIT_BARBER_SHOP, 1);
 
     _player->SetStandState(0);                              // stand up

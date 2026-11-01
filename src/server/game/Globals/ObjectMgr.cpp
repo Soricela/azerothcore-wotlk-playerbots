@@ -4343,6 +4343,62 @@ void ObjectMgr::PlayerCreateInfoAddItemHelper(uint32 race_, uint32 class_, uint3
     }
 }
 
+void ObjectMgr::LoadCustomRaceDisplays()
+{
+    _customRaceDisplays.clear();
+    WorldDatabasePreparedStatement* stmt = WorldDatabase.GetPreparedStatement(WORLD_SEL_CUSTOM_RACE_DISPLAYS);
+    PreparedQueryResult result = WorldDatabase.Query(stmt);
+    uint32 count = 0;
+    if (result)
+    {
+        do
+        {
+            Field* fields = result->Fetch();
+            uint8 const race = fields[0].Get<uint8>();
+            uint8 const gender = fields[1].Get<uint8>();
+            uint32 const index = fields[2].Get<uint32>();
+            uint32 const displayId = fields[3].Get<uint32>();
+            if (!race || race > 32 || gender > GENDER_FEMALE ||
+                !(sRaceMgr->GetPlayableRaceMask() & (uint32{1} << (race - 1))))
+            {
+                LOG_ERROR("sql.sql", "Invalid race {} or gender {} in custom_race_display, ignoring.", race, gender);
+                continue;
+            }
+
+            CreatureDisplayInfoEntry const* display = sCreatureDisplayInfoStore.LookupEntry(displayId);
+            if (!display || !sCreatureModelDataStore.LookupEntry(display->ModelId))
+            {
+                LOG_ERROR("sql.sql", "Invalid display {} in custom_race_display, ignoring.", displayId);
+                continue;
+            }
+
+            _customRaceDisplays[(uint32(race) << 8) | gender][index] = displayId;
+            ++count;
+        } while (result->NextRow());
+    }
+
+    LOG_INFO("server.loading", ">> Loaded {} custom race displays", count);
+}
+
+uint32 ObjectMgr::GetCustomRaceDisplay(uint8 race, uint8 gender, uint8 skin, uint8 hairStyle) const
+{
+    auto const itr = _customRaceDisplays.find((uint32(race) << 8) | gender);
+    if (itr == _customRaceDisplays.end() || itr->second.empty())
+        return 0;
+
+    auto const& looks = itr->second;
+    // COA 1.0 encodes murloc armor and skin as hairStyle * 32 + skin.
+    if (auto const look = looks.find(uint32(hairStyle) * 32 + skin); look != looks.end())
+        return look->second;
+    if (auto const look = looks.find(skin); look != looks.end())
+        return look->second;
+
+    auto look = looks.begin();
+    for (std::size_t offset = 0; offset < skin % looks.size(); ++offset)
+        ++look;
+    return look->second;
+}
+
 void ObjectMgr::LoadPlayerInfo()
 {
     // Load playercreate
@@ -4972,6 +5028,8 @@ void ObjectMgr::LoadPlayerInfo()
         LOG_INFO("server.loading", ">> Loaded {} XP For Level Definitions in {} ms", count, GetMSTimeDiffToNow(oldMSTime));
         LOG_INFO("server.loading", " ");
     }
+
+    LoadCustomRaceDisplays();
 }
 
 void ObjectMgr::GetPlayerClassLevelInfo(uint32 class_, uint8 level, PlayerClassLevelInfo* info) const

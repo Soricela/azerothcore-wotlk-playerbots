@@ -536,7 +536,6 @@ bool Player::Create(ObjectGuid::LowType guidlow, CharacterCreateInfo* createInfo
     uint32 RaceClassGender = (createInfo->Race) | (createInfo->Class << 8) | (createInfo->Gender << 16);
 
     SetUInt32Value(UNIT_FIELD_BYTES_0, (RaceClassGender | (powertype << 24)));
-    InitDisplayIds();
     if (sWorld->getIntConfig(CONFIG_GAME_TYPE) == REALM_TYPE_PVP || sWorld->getIntConfig(CONFIG_GAME_TYPE) == REALM_TYPE_RPPVP)
     {
         SetByteFlag(UNIT_FIELD_BYTES_2, 1, UNIT_BYTE2_FLAG_PVP);
@@ -556,6 +555,7 @@ bool Player::Create(ObjectGuid::LowType guidlow, CharacterCreateInfo* createInfo
                                     (((GetSession()->IsARecruiter() || GetSession()->GetRecruiterId() != 0) ? REST_STATE_RAF_LINKED : REST_STATE_NOT_RAF_LINKED) << 24)));
     SetByteValue(PLAYER_BYTES_3, 0, createInfo->Gender);
     SetByteValue(PLAYER_BYTES_3, 3, 0);                     // BattlefieldArenaFaction (0 or 1)
+    InitDisplayIds();
 
     SetUInt32Value(PLAYER_GUILDID, 0);
     SetUInt32Value(PLAYER_GUILDRANK, 0);
@@ -10851,7 +10851,7 @@ void Player::InitDisplayIds()
         return;
     }
 
-    uint8 gender = getGender();
+    uint8 const gender = GetByteValue(PLAYER_BYTES_3, 0);
     switch (gender)
     {
         case GENDER_FEMALE:
@@ -10866,6 +10866,16 @@ void Player::InitDisplayIds()
             LOG_ERROR("entities.player", "Invalid gender {} for player", gender);
             return;
     }
+
+    if (uint32 const display = sObjectMgr->GetCustomRaceDisplay(
+        getRace(true), gender, GetByteValue(PLAYER_BYTES, 0), GetByteValue(PLAYER_BYTES, 2)))
+    {
+        SetDisplayId(display);
+        SetNativeDisplayId(display);
+    }
+
+    // NPC display metadata must not replace the player's selected gender.
+    SetByteValue(UNIT_FIELD_BYTES_0, 2, gender);
 }
 
 inline bool Player::_StoreOrEquipNewItem(uint32 vendorslot, uint32 item, uint8 count, uint8 bag, uint8 slot, int32 price, ItemTemplate const* pProto, Creature* pVendor, VendorItem const* crItem, bool bStore)

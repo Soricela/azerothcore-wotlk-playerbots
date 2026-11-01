@@ -811,6 +811,7 @@ public:
     void GetPlayerClassLevelInfo(uint32 class_, uint8 level, PlayerClassLevelInfo* info) const;
 
     [[nodiscard]] PlayerInfo const* GetPlayerInfo(uint32 race, uint32 class_) const;
+    [[nodiscard]] uint32 GetCustomRaceDisplay(uint8 race, uint8 gender, uint8 skin, uint8 hairStyle) const;
 
     void GetPlayerLevelInfo(uint32 race, uint32 class_, uint8 level, PlayerLevelInfo* info) const;
 
@@ -1632,6 +1633,8 @@ private:
     void BuildPlayerLevelInfo(uint8 race, uint8 class_, uint8 level, PlayerLevelInfo* plinfo) const;
 
     std::vector<std::vector<PlayerInfo*>> _playerInfo;
+    void LoadCustomRaceDisplays();
+    std::map<uint32, std::map<uint32, uint32>> _customRaceDisplays;
 
     typedef std::vector<uint32> PlayerXPperLevel;       // [level]
     PlayerXPperLevel _playerXPperLevel;

@@ -56,16 +56,22 @@ void RaceMgr::LoadRaces()
         if (!raceEntry)
             continue;
 
+        if (raceEntry->HasFlag(CHRRACES_FLAGS_NOT_PLAYABLE))
+            continue;
+
+        if (!raceEntry->RaceID || raceEntry->RaceID > 32)
+        {
+            LOG_ERROR("dbc", "Playable race {} is outside the 32-bit race mask, ignoring.", raceEntry->RaceID);
+            continue;
+        }
+
         uint8 alliance = raceEntry->alliance;
         uint8 raceId = raceEntry->RaceID;
-
-        if (raceEntry->Flags & CHRRACES_FLAGS_NOT_PLAYABLE)
-            continue;
 
         if (GetMaxRaces() <= raceId)
             SetMaxRaces(raceId + 1);
 
-        uint32 raceBit = (1 << (raceId - 1));
+        uint32 raceBit = (uint32{1} << (raceId - 1));
 
         _playableRaceMask |= raceBit;
 

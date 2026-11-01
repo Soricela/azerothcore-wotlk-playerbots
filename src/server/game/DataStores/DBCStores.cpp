@@ -417,7 +417,8 @@ void LoadDBCStores(std::string const& dataPath)
         sCharStartOutfitMap[outfit->Race | (outfit->Class << 8) | (outfit->Gender << 16)] = outfit;
 
     for (CharSectionsEntry const* charSection : sCharSectionsStore)
-        if (charSection->Race && ((1 << (charSection->Race - 1)) & sRaceMgr->GetPlayableRaceMask()) != 0) //ignore Nonplayable races
+        if (charSection->Race && charSection->Race <= 32 &&
+            ((uint32{1} << (charSection->Race - 1)) & sRaceMgr->GetPlayableRaceMask()) != 0)
             sCharSectionMap.insert({ charSection->GenType | (charSection->Gender << 8) | (charSection->Race << 16), charSection });
 
     for (FactionEntry const* faction : sFactionStore)
